@@ -800,7 +800,7 @@
             </div>
             <div class="stats-row">
               <div class="stat-tile"><div class="num" id="stat-recomend">73</div><div class="lab" data-i18n="stat_recs">Recomend.</div></div>
-              <div class="stat-tile"><div class="num" id="stat-utiles">61</div><div class="lab" data-i18n="stat_helpful">Útiles</div></div>
+              <div class="stat-tile"><div class="num" id="stat-utiles">0</div><div class="lab" data-i18n="stat_helpful">Útiles</div></div>
               <div class="stat-tile"><div class="num" id="stat-chollos">17</div><div class="lab" data-i18n="cat_deals">Chollazos</div></div>
               <div class="stat-tile"><div class="num" id="stat-guardados">0</div><div class="lab" data-i18n="label_saved_plural">Guardados</div></div>
             </div>
@@ -1603,10 +1603,12 @@
 
   let myRecommendCount = 73;
   let myChollazoCount = 17;
+  let myUtilesCount = 0;
 
   function renderMyStats(){
     document.getElementById('stat-recomend').textContent = myRecommendCount;
     document.getElementById('stat-chollos').textContent = myChollazoCount;
+    document.getElementById('stat-utiles').textContent = myUtilesCount;
   }
 
   let myActivity = [];
@@ -1694,6 +1696,7 @@
     };
     myRecommendCount = 0;
     myChollazoCount = 0;
+    myUtilesCount = 0;
     myActivity = [];
     hasLegacyActivity = false;
     resetChatMemberships(false);
@@ -1709,6 +1712,7 @@
     await loadSavedMessagesFromSupabase();
     await loadBlockedFromSupabase();
     await loadModerationReports();
+    await loadMyStatsFromSupabase();
     renderFeed();
     renderChollazos();
     renderChats();
@@ -3409,6 +3413,38 @@
         const who = msg.profiles ? msg.profiles.username : 'Xulapa';
         return { cid: msg.chat_rooms.slug, id: msg.id, who: who, text: msg.body, initial: who.charAt(0).toUpperCase(), color: colorFromName(who.toLowerCase()) };
       });
+  }
+
+  // Calcula las 3 cifras reales del perfil (Recomend., Chollos, Útiles) a
+  // partir de Supabase, en vez de los contadores de sesión que había antes
+  // (myRecommendCount/myChollazoCount solo subían al publicar algo EN esa
+  // sesión, y se reiniciaban a 0 en cada login — así que un cierre y
+  // apertura de sesión hacía "desaparecer" lo publicado antes; y
+  // myUtilesCount ni existía: el HTML traía escrito a mano un "61" de
+  // mentira que ninguna función llegó a sustituir, así que toda cuenta
+  // nueva lo veía nada más registrarse). Ahora las 3 se leen siempre de
+  // la base de datos real al entrar en la app.
+  async function loadMyStatsFromSupabase(){
+    if(!currentUser){ myRecommendCount = 0; myChollazoCount = 0; myUtilesCount = 0; return; }
+    const [myPosts, myAnswers, myDeals] = await Promise.all([
+      sb.from('posts').select('id, kind').eq('author_id', currentUser.id),
+      sb.from('answers').select('id').eq('author_id', currentUser.id),
+      sb.from('deals').select('id').eq('author_id', currentUser.id)
+    ]);
+    const posts = myPosts.data || [];
+    const postIds = posts.map(p => p.id);
+    const answerIds = (myAnswers.data || []).map(a => a.id);
+    const dealIds = (myDeals.data || []).map(d => d.id);
+
+    myRecommendCount = posts.filter(p => p.kind === 'recomendacion').length;
+    myChollazoCount = dealIds.length;
+
+    const counts = await Promise.all([
+      postIds.length ? sb.from('reactions').select('*', { count:'exact', head:true }).eq('kind','util').in('post_id', postIds) : Promise.resolve({ count:0 }),
+      answerIds.length ? sb.from('reactions').select('*', { count:'exact', head:true }).eq('kind','util').in('answer_id', answerIds) : Promise.resolve({ count:0 }),
+      dealIds.length ? sb.from('reactions').select('*', { count:'exact', head:true }).eq('kind','util').in('deal_id', dealIds) : Promise.resolve({ count:0 })
+    ]);
+    myUtilesCount = counts.reduce((sum, c) => sum + (c.count || 0), 0);
   }
 
   function renderSaved(){
